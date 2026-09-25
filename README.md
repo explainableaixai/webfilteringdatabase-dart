@@ -77,7 +77,7 @@ The client does not retry. Most filters are better off caching `unknown` for a f
 
 Yes. Schools in the United States that take E-rate funding must filter under the Children's Internet Protection Act (CIPA), and many districts elsewhere follow similar rules. Categories such as adult content, gambling, weapons and proxies map directly onto those policies. A district filter typically blocks those categories outright and sends everything else through normal logging.
 
-Generative AI deserves its own decision in schools. Some districts block AI chat during exams and allow it at other times. To [block AI tools during exams](https://www.aitoolsblocklist.com/education-ai-filtering.php) rather than site by site, add the dedicated AI register as a second source.
+Generative AI deserves its own decision in schools. Some districts block AI chat during exams and allow it at other times. To [block AI tools during exams](https://www.aitoolsblocklist.com) rather than site by site, add the dedicated AI register as a second source.
 
 ## How should an MSP structure this across many clients?
 
