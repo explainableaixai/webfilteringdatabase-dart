@@ -1,159 +1,121 @@
-# Web Filtering Database for Dart and Flutter
+# Web Filtering Database client for Dart
 
-`webfilteringdatabase` is the Dart and Flutter network-oriented website filtering client for [Web Filtering Database](https://www.webfilteringdatabase.com). It gives applications a small, typed interface for a production data service while keeping authentication, URL construction, response decoding, retries, and error handling out of business logic.
+`webfilteringdatabase` classifies a domain or URL into a web filtering category, the kind a DNS resolver, secure web gateway or school filter uses to decide allow or block. It calls the classification endpoint of the [category data built for DNS resolvers and gateways](https://www.webfilteringdatabase.com) and hands the JSON back to your Dart code.
 
-Firewalls, DNS resolvers, gateways, and reporting systems need policy-oriented labels such as phishing, gambling, streaming, or social networking rather than advertising-only content labels. The database classifies more than 120 million domains into a purpose-built 59-category web-filtering taxonomy and can be used through lookups or licensed for local deployment.
-
-This package is designed as a real client library rather than a collection of copied HTTP examples. It supports the normal lifecycle of a lookup: validate input, send the API key in the expected header, apply a bounded timeout, decode a successful response, distinguish authentication and quota failures, and expose response fields without discarding information that may be needed later. It fits secure web gateways, DNS policy engines, parental controls, acceptable-use reporting and other applications where the decision must be repeatable and auditable.
-
-## Installation
-
-Install the published package from pub.dev:
-
-```text
+```bash
 dart pub add webfilteringdatabase
 ```
-
-Store the API key outside source control. Examples use `AQ_API_KEY`, but production applications can obtain the value from their established secret manager. Never place a working key in a README, test fixture, command history, mobile bundle, browser-delivered JavaScript, or committed configuration file.
-
-## Quick start
 
 ```dart
 import 'package:webfilteringdatabase/webfilteringdatabase.dart';
 
-Future<void> main() async {
-  final client = WebFilteringDatabaseClient(apiKey: const String.fromEnvironment('AQ_API_KEY'));
-  final result = await client.classify('example.com');
-  print(result.toJson());
+final wf = WebFilteringDatabaseClient(apiKey: key);
+final r = await wf.classify('example.com');
+print(r.toJson());
+wf.close();
+```
+
+The rest of this page is organised as the questions people ask when they build a filter around it.
+
+## What is the difference between this and the downloadable database?
+
+The database is a licensed file you load into your resolver or gateway. Lookups against it are local, instant and free of per-call cost, which is what you want for the traffic you see every day.
+
+This package is for the domains the file does not have yet. New registrations, fresh campaign sites and obscure hosts all show up in real traffic before they show up in any list. Calling `classify` on a miss gives you a category right away, so the policy has something to act on.
+
+## What does a response contain?
+
+The main field is the filtering category, with a confidence value. Depending on the request, the service can also return the root domain it evaluated and the method used to reach the answer. The field reference is published in the API documentation on the website. The client returns the JSON unchanged in an `ApiResult`, which you read with `r['field']` or convert with `toJson()`.
+
+## Where should the call sit in a resolver?
+
+After the local lookup and before the default action. A sketch:
+
+```dart
+Future<String> categoryFor(String host) async {
+  final local = localDb[host];
+  if (local != null) return local;
+  try {
+    final r = await wf.classify(host);
+    final cat = r['web_filtering_category'] as String?;
+    if (cat != null) localDb[host] = cat; // remember it
+    return cat ?? 'unknown';
+  } on ApiException {
+    return 'unknown';
+  }
 }
 ```
 
-The client returns a structured result containing ranked filtering categories, IAB categories, language, and remaining credits. It does not turn a nuanced response into an unexplained boolean unless a convenience method explicitly promises that behavior. Keeping the full result makes logs useful, allows a policy to evolve without repeating a lookup, and gives an operator enough context to understand why an action was taken.
+Two rules keep a resolver healthy:
 
-## What the client handles
+1. **Never block the DNS answer on a slow call.** Serve the default action for this query and let the classification land in the cache for the next one.
+2. **Decide what `unknown` means.** A school network may block unknown domains. An office network usually allows them and logs them.
 
-The package owns transport concerns that should behave consistently across a codebase. It normalizes inputs only where the service contract allows normalization, attaches the API key without putting it in a query string, sends a descriptive user agent, negotiates JSON, checks status codes before decoding success models, and retains the response body on service errors. A caller should be able to catch an authentication problem separately from a quota limit, a malformed request, a temporary server failure, or a local network timeout.
+## How fast is it, and how do I set timeouts?
 
-Retries are intentionally conservative. Network interruptions, `429` responses with a usable delay, and selected `5xx` responses may be retried with bounded backoff. Invalid input and authentication failures are not retried because another identical request cannot repair them. Applications performing large batches should add their own pacing, concurrency limit, cancellation, and checkpointing around the client instead of starting an unbounded number of requests.
+A classification involves looking at the site, so it is slower than a local match. The default timeout is 30 seconds. On a hot path, set a shorter one and treat a timeout as `unknown`:
 
-The default endpoint is suitable for normal hosted use, while a configurable base URL makes integration tests and licensed on-premises deployments possible. Timeout and retry values are configurable at client construction. Configuration is immutable after construction so the same instance can be shared safely according to normal Dart and Flutter conventions.
+```dart
+final wf = WebFilteringDatabaseClient(
+  apiKey: key,
+  timeout: const Duration(seconds: 5),
+);
+```
 
-## Response model
+A timeout surfaces as `TimeoutException` from `dart:async`.
 
-The public model mirrors useful service data and leaves room for additive fields. Unknown JSON properties should not make an otherwise valid response fail. New package versions may add typed accessors when the service adds fields, but callers that retain the raw response can adopt new data without waiting for a library release.
+## What errors can I expect?
 
-| Field | Purpose |
-|---|---|
-| `query` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `filtering_taxonomy` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `iab_taxonomy` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `iab_taxonomy_version2` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `language` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `buyer_personas` | Preserved from the service response for typed access, logging, or policy decisions. |
-| `remaining_credits` | Preserved from the service response for typed access, logging, or policy decisions. |
+- `AuthenticationException`: HTTP 401 or 403. The key is wrong, or the plan's quota for the month is used.
+- `RateLimitException`: HTTP 429. Too many calls too quickly.
+- `ApiException`: any other HTTP failure, or a reply that is not a JSON object. `statusCode` and `body` hold the details.
+- `ArgumentError`: empty key or empty input, raised before anything is sent.
 
-Applications should record the query, result, decision, and request time in their own audit log. They should not record the API key. If results contain URLs or domains derived from user activity, apply the same retention and access controls used for the originating DNS, proxy, firewall, browser, or analytics data.
+The client does not retry. Most filters are better off caching `unknown` for a few minutes than hammering the service.
 
-## Integration pattern: request-time decision
+## Can I use it for school filtering?
 
-For interactive use, create one client during application startup and reuse it. Read the key and configuration once, validate that required values exist, then inject the client into the service that needs classifications. Reuse allows the underlying HTTP implementation to pool connections and makes global timeout and retry behavior predictable.
+Yes. Schools in the United States that take E-rate funding must filter under the Children's Internet Protection Act (CIPA), and many districts elsewhere follow similar rules. Categories such as adult content, gambling, weapons and proxies map directly onto those policies. A district filter typically blocks those categories outright and sends everything else through normal logging.
 
-Keep the policy separate from the lookup. The package reports service facts; the application decides what those facts mean for a user, tenant, network segment, or agent. That separation makes it possible to run in observation mode, compare proposed decisions with existing controls, and change a policy without replacing the transport layer.
+Generative AI deserves its own decision in schools. Some districts block AI chat during exams and allow it at other times. To [block AI chat sites by category](https://www.aitoolsblocklist.com) rather than one by one, add the dedicated AI register as a second source.
 
-When a lookup is on a critical request path, define failure behavior before deployment. Security controls commonly fail closed or send an indeterminate result to review. Analytics enrichment commonly fails open and records a missing classification for later repair. There is no universal answer, but silently treating a timeout as a positive result is rarely defensible.
+## How should an MSP structure this across many clients?
 
-## Integration pattern: batch processing
+Keep one shared cache of classifications and separate policies per client. The category of a domain does not depend on who asks, but the action does. A law firm may block file sharing while a design agency needs it. Store `domain → category` once, then map `client + category → action` in a small table each client can change. A new client then starts with a warm cache on day one.
 
-Batch jobs should remove duplicate inputs before making requests, preserve the original-to-normalized mapping, and save progress in restartable chunks. Use a small concurrency limit rather than one worker per row. Read quota information from every successful response and stop cleanly before exhaustion so a scheduled job can report what remains instead of producing a half-explained failure.
+## What about subdomains and shared hosting?
 
-A useful output record contains the original value, normalized value, lookup timestamp, package version, primary result, full category or policy data, and any error code. That record is adequate for later reconciliation and lets analysts distinguish “not found” from “not checked.” If the service data changes over time, the timestamp also makes clear which decision basis was available at the time.
+Classify at the level where the content differs. For most companies the registered domain is enough. For hosting platforms, blog networks and cloud storage, one parent domain holds many unrelated sites, so pass the full hostname or URL. A filter that decides on `example-host.com` alone would treat every customer site on that host the same.
 
-Cache only for a period appropriate to the product. A short process-local cache eliminates repeated calls during one job. A longer shared cache can reduce cost, but it must include enough context in the key and must not outlive the organization’s tolerance for stale classifications. Do not cache authentication, malformed-request, or transient server errors as if they were valid negative answers.
+## How do I test code that uses the client?
 
-## Operational guidance
+Swap in a `MockClient`:
 
-Use explicit timeouts at every layer. The HTTP timeout protects a single attempt, while an application deadline protects the complete operation including retries. Propagate cancellation from incoming requests and job supervisors. Emit metrics for total lookups, latency, success, status-code family, retries, cache hits, and remaining quota. Alert on sustained authentication errors, an unexpected increase in indeterminate results, or a quota trajectory that will reach zero before renewal.
+```dart
+final wf = WebFilteringDatabaseClient(
+  apiKey: 'test',
+  httpClient: MockClient((_) async =>
+      http.Response('{"web_filtering_category":"News"}', 200)),
+);
+```
 
-Pin a compatible major version in application dependencies and test upgrades in staging. Package releases use semantic versioning: patch releases repair behavior without changing the public contract, minor releases add compatible capabilities, and major releases may require source changes. Service responses can gain fields independently, so decoders are forward-compatible and callers should avoid exhaustive assumptions about future enum values.
+Or point `baseUrl` at a local stub server that returns canned replies.
 
-For regulated or security-sensitive deployments, retain the package version and policy version with every decision. A later review should be able to answer which code interpreted the response, which rule consumed it, and what the service returned. This is more valuable than a log line containing only “allowed” or “blocked.”
+## Does the client send my users' browsing data?
 
-## Errors
+It sends only what you pass to `classify`: one domain or URL per call, plus your key. It sends no client IP, username or device ID. If you pass full URLs, consider stripping query strings first. They can carry session tokens and personal data, and the domain alone is usually enough to classify.
 
-The client distinguishes configuration errors raised before a request, invalid-input responses, authentication failures, exhausted quota or authorization failures, rate limits, transport timeouts, server failures, and response-decoding problems. Error values include an HTTP status when one exists and a safely bounded response body for diagnostics. Secrets are never included in an error message.
+## What else is useful alongside it?
 
-Callers should handle known service errors explicitly and place a final handler around unexpected transport failures. Batch workflows can attach an error to an individual row and continue when appropriate. Authentication failures should normally stop the batch because every remaining request would fail. Rate limits should pause according to server guidance. Invalid rows can be quarantined for correction.
+- For a view of which AI apps people use, [a report of AI apps seen on the network](https://www.shadowaitools.com) works from the same DNS logs a filter already keeps.
+- For topic categories aimed at advertising and analytics, [live classification for domains not yet listed](https://www.websitecategorizationapi.com) uses the IAB taxonomy.
 
-## Security and privacy
+## Is there a version for other languages?
 
-Use TLS verification and do not add a “disable certificate checks” option to production configuration. Restrict API keys by environment and product where the account system permits it. Rotate a key immediately if it appears in a package, repository, build log, support ticket, or client-side application. A deleted Git commit does not make an exposed key secret again.
-
-Minimize data sent to the service. Submit only the domain, URL, method, or file-derived hostname required by the documented operation. For log-analysis workflows, normalize and deduplicate locally before lookup. Do not attach cookies, page contents, user identifiers, authorization headers from the originating request, or unrelated log columns.
-
-## Why a maintained SDK helps
-
-Direct HTTP calls are easy for the first successful example and expensive at the edges. Six teams can otherwise invent six interpretations of timeouts, retries, missing fields, normalization, user agents, and quota failures. A maintained package gives those decisions one reviewed implementation and gives downstream applications a stable model even as internal transport details improve.
-
-An ecosystem-native package also makes discovery and evaluation easier. Users can inspect its license, release history, documentation, dependencies, source, and examples using familiar tools. They can pin a version, run dependency auditing, generate API documentation, and compare changes before upgrading. The README is part of that interface: it explains not just which method to call, but how the result belongs in an operational system.
-
-## Related implementations for the same product
-
-Use the implementation that matches the deployment environment. These repositories and registry pages all focus on Web Filtering Database rather than unrelated products:
-
-- [JavaScript repository](https://github.com/explainableaixai/webfilteringdatabase)
-- [Composer repository](https://github.com/optimiser4/webfilteringdatabase)
-- [npm client](https://www.npmjs.com/package/webfilteringdatabase)
-- [Ruby client](https://rubygems.org/gems/webfiltering)
-- [Rust client](https://crates.io/crates/webfilteringdatabase)
-- [PHP client](https://packagist.org/packages/webfilteringdatabase/webfilteringdatabase)
-
-The implementations share service concepts but follow the conventions of their languages. Method names, async models, error hierarchies, and packaging layouts are intentionally native rather than forced into a byte-for-byte common shape.
-
-## Companion data services
-
-The following links connect this package to complementary layers used in broader governance and classification systems. Each description identifies a distinct job rather than repeating a product name:
-
-- [the AI Tools Blocklist database, queried by Dart and Flutter Web Filtering Database](https://www.aitoolsblocklist.com)
-- [Dart and Flutter workflow for exposing unapproved AI adoption alongside Web Filtering Database](https://www.shadowaitools.com)
-- [Dart and Flutter companion data for contextual targeting within Web Filtering Database deployments](https://www.urlcategorizationdatabase.com)
-- [Dart and Flutter enrichment layer connecting Web Filtering Database with contextual advertising](https://www.websitecategorizationapi.com)
-
-These services solve different questions. AI-service recognition identifies tools in network traffic. Shadow-AI analysis turns existing logs into an inventory. Agent URL policy evaluates the page an autonomous browser wants to reach. Content classification describes what a site is about, and filtering classification maps a site to network-policy categories. Combining them should be an explicit architecture decision, not an assumption that one verdict substitutes for another.
-
-## Standards and further reading
-
-- [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
-- [FCC CIPA guidance](https://www.fcc.gov/consumers/guides/childrens-internet-protection-act)
-- [RFC 1035 domain names](https://www.rfc-editor.org/rfc/rfc1035)
-
-These references provide vocabulary and control objectives; they do not endorse this package. Map the client’s output to the organization’s own risk assessment, legal duties, acceptable-use rules, and incident process.
-
-## Frequently asked questions
-
-### Does the package include the underlying database?
-
-No. The normal package is a client and contains no bulk commercial dataset. It sends documented lookup inputs to the hosted service and returns structured results. Where an offline database licence is available, the same client interface can be adapted to an internal endpoint so application policy does not have to change.
-
-### Should I create a new client for every lookup?
-
-No. Construct one client for an application or worker and reuse it. This keeps configuration consistent and allows connection pooling. Create separate clients only when endpoints, credentials, tenants, or materially different timeout policies require isolation.
-
-### Can I use the result as a permanent fact?
-
-Treat classifications and policy findings as dated intelligence. Websites change purpose, vendors revise terms, new page types appear, and threat or governance policy evolves. Store the lookup time and refresh data according to the consequence of staleness.
-
-### What should happen when the service is unavailable?
-
-Choose behavior based on the calling system’s risk. A security gate can deny or require review. An enrichment pipeline can retain the row as pending. Whatever the choice, make it explicit, observable, and tested. Do not convert an infrastructure failure into a confident classification.
-
-### Is batch processing one API call?
-
-The convenience batch method coordinates individual lookups unless the product documentation explicitly describes a bulk endpoint. Each item can consume quota. Deduplicate inputs, pace work, monitor the returned balance, and checkpoint output.
-
-### How should I contribute?
-
-Open an issue in the source repository with the package version, runtime version, a minimal reproduction, expected behavior, and sanitized response details. Never include a working API key or private network log. Changes should include tests and update public documentation when behavior changes.
+- [npm: webfilteringdatabase](https://www.npmjs.com/package/webfilteringdatabase)
+- [Rust crate: webfilteringdatabase](https://crates.io/crates/webfilteringdatabase)
+- [PHP: webfilteringdatabase on Packagist](https://packagist.org/packages/webfilteringdatabase/webfilteringdatabase)
 
 ## License
 
-MIT. The package licence covers the client source. Access to hosted APIs, downloadable datasets, and commercial data remains governed by the applicable service plan and terms.
+MIT
