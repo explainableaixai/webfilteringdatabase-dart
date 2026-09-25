@@ -1,6 +1,6 @@
 # Web Filtering Database client for Dart
 
-`webfilteringdatabase` classifies a domain or URL into a web filtering category, the kind a DNS resolver, secure web gateway or school filter uses to decide allow or block. It calls the classification endpoint of the [category data built for DNS resolvers and gateways](https://www.webfilteringdatabase.com) and hands the JSON back to your Dart code.
+`webfilteringdatabase` classifies a domain or URL into a web filtering category, the kind a DNS resolver, secure web gateway or school filter uses to decide allow or block. It calls the classification endpoint of the [web filter lookup](https://www.webfilteringdatabase.com/check-domain.php) service and hands the JSON back to your Dart code.
 
 ```bash
 dart pub add webfilteringdatabase
@@ -77,7 +77,7 @@ The client does not retry. Most filters are better off caching `unknown` for a f
 
 Yes. Schools in the United States that take E-rate funding must filter under the Children's Internet Protection Act (CIPA), and many districts elsewhere follow similar rules. Categories such as adult content, gambling, weapons and proxies map directly onto those policies. A district filter typically blocks those categories outright and sends everything else through normal logging.
 
-Generative AI deserves its own decision in schools. Some districts block AI chat during exams and allow it at other times. To [block AI chat sites by category](https://www.aitoolsblocklist.com) rather than one by one, add the dedicated AI register as a second source.
+Generative AI deserves its own decision in schools. Some districts block AI chat during exams and allow it at other times. To [block AI tools during exams](https://www.aitoolsblocklist.com/education-ai-filtering.php) rather than site by site, add the dedicated AI register as a second source.
 
 ## How should an MSP structure this across many clients?
 
@@ -107,8 +107,8 @@ It sends only what you pass to `classify`: one domain or URL per call, plus your
 
 ## What else is useful alongside it?
 
-- For a view of which AI apps people use, [a report of AI apps seen on the network](https://www.shadowaitools.com) works from the same DNS logs a filter already keeps.
-- For topic categories aimed at advertising and analytics, [live classification for domains not yet listed](https://www.websitecategorizationapi.com) uses the IAB taxonomy.
+- For a view of which AI apps people use, [a sample shadow AI audit](https://www.shadowaitools.com/sample-report.php) works from the same DNS logs a filter already keeps.
+- For topic categories aimed at advertising and analytics, the [domain classification API](https://www.websitecategorizationapi.com/api-docs.php) uses the IAB taxonomy.
 
 ## Is there a version for other languages?
 
